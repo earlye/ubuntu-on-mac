@@ -1,0 +1,82 @@
+# Draft courtesy google ai (gemini?)
+name: Build MacBook Ubuntu Live ISO
+
+on:
+  workflow_dispatch: # Allows you to trigger the build manually from the GitHub UI
+
+jobs:
+  build-iso:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install ISO Customization Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y squashfs-tools xorriso rsync wget
+
+      - name: Download Official Ubuntu ISO
+        run: |
+          # Swap this URL if you prefer standard Ubuntu Desktop 26.04 or an older LTS
+          wget -O ubuntu-original.iso "https://ubuntu.com"
+
+      - name: Extract ISO and Filesystem
+        run: |
+          mkdir -p mnt/ ext-iso/ squashfs-root/
+
+          # Mount and extract the ISO file contents
+          sudo mount -o loop ubuntu-original.iso mnt/
+          rsync -a --exclude=/casper/filesystem.squashfs mnt/ ext-iso/
+
+          # Unsquash the core Ubuntu root file system
+          sudo unsquashfs -d squashfs-root/ mnt/casper/filesystem.squashfs
+          sudo umount mnt/
+
+      - name: Inject Broadcom Driver via Chroot
+        run: |
+          # Bind mount essential system directories so apt can run inside the chroot
+          sudo mount --bind /dev squashfs-root/dev
+          sudo mount --bind /proc squashfs-root/proc
+          sudo mount --bind /sys squashfs-root/sys
+          sudo mount --bind /etc/resolv.conf squashfs-root/etc/resolv.conf
+
+          # Run commands INSIDE the live Ubuntu image environment
+          sudo chroot squashfs-root/ bash -c "
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update
+            apt-get install -y bcmwl-kernel-source dkms
+            apt-get clean
+          "
+
+          # Cleanly unmount directories
+          sudo umount squashfs-root/dev
+          sudo umount squashfs-root/proc
+          sudo umount squashfs-root/sys
+          sudo umount squashfs-root/etc/resolv.conf
+
+      - name: Rebuild compressed SquashFS
+        run: |
+          sudo rm -f ext-iso/casper/filesystem.squashfs
+          sudo mksquashfs squashfs-root/ ext-iso/casper/filesystem.squashfs -comp xz
+
+      - name: Rebuild Final Bootable ISO File
+        run: |
+          # Pack it back into an active bootable ISO utilizing xorriso
+          sudo xorriso -as mkisofs \
+            -iso-level 3 \
+            -full-iso9660-filenames \
+            -volid "Ubuntu-MacBook" \
+            -output "ubuntu-macbook.iso" \
+            -eltorito-boot boot/grub/efi.img \
+            -no-emul-boot \
+            -boot-load-size 4 \
+            -boot-info-table \
+            ext-iso/
+
+      - name: Upload Finished ISO Asset
+        uses: actions/artifacts@v4
+        with:
+          name: ubuntu-macbook-iso
+          path: ubuntu-macbook.iso
+          retention-days: 5
