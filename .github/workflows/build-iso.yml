@@ -39,19 +39,35 @@ jobs:
 
       - name: Extract ISO and filesystem
         run: |
-          # Capture boot parameters before extraction so we can rebuild the ISO correctly.
-          # xorriso -report_* as_mkisofs produces args that replicate the original hybrid boot setup.
+          # Capture boot parameters from the original ISO.
+          # -report_system_area as_mkisofs outputs all options needed to recreate the
+          # hybrid BIOS/UEFI boot setup (MBR, EFI partition, El Torito catalog).
+          # Both -report_system_area and -report_el_torito produce identical output for
+          # Ubuntu 24.04 ISOs, so we only need one.
           xorriso -indev ubuntu-original.iso \
-            -report_system_area as_mkisofs 2>/dev/null > /tmp/mbr_opts.txt || true
-          xorriso -indev ubuntu-original.iso \
-            -report_el_torito as_mkisofs 2>/dev/null > /tmp/boot_opts.txt || true
-          echo "=== MBR opts ===" && cat /tmp/mbr_opts.txt
-          echo "=== boot opts ===" && cat /tmp/boot_opts.txt
+            -report_system_area as_mkisofs 2>/dev/null > /tmp/xorriso_opts.txt || true
+          echo "=== xorriso opts ===" && cat /tmp/xorriso_opts.txt
 
           mkdir -p mnt/ ext-iso/ squashfs-root/
           sudo mount -o loop ubuntu-original.iso mnt/
-          rsync -a --exclude=/casper/filesystem.squashfs mnt/ ext-iso/
-          sudo unsquashfs -d squashfs-root/ mnt/casper/filesystem.squashfs
+
+          echo "=== ISO casper contents ==="
+          ls -la mnt/casper/ 2>/dev/null || ls -la mnt/
+
+          # Ubuntu 24.04 may use a non-standard squashfs filename; find it dynamically.
+          # Pick the largest .squashfs file — that is always the main live filesystem.
+          SQUASHFS=$(find mnt/ -name "*.squashfs" -type f | xargs ls -S | head -1)
+          if [ -z "$SQUASHFS" ]; then
+            echo "ERROR: no .squashfs file found in ISO"
+            find mnt/ -type f | sort
+            exit 1
+          fi
+          echo "Using squashfs: $SQUASHFS"
+          # Save relative path (strip leading "mnt/") for use in later steps
+          printf '%s' "${SQUASHFS#mnt/}" > /tmp/squashfs_path.txt
+
+          rsync -a --exclude="/${SQUASHFS#mnt/}" mnt/ ext-iso/
+          sudo unsquashfs -d squashfs-root/ "$SQUASHFS"
           sudo umount mnt/
 
       - name: Install Broadcom driver in chroot
@@ -87,32 +103,30 @@ jobs:
 
       - name: Rebuild SquashFS filesystem
         run: |
-          sudo rm -f ext-iso/casper/filesystem.squashfs
-          sudo mksquashfs squashfs-root/ ext-iso/casper/filesystem.squashfs -comp xz
-          # Ubuntu live boot reads this to size its tmpfs correctly
+          SQUASHFS_RELPATH=$(cat /tmp/squashfs_path.txt)
+          sudo rm -f "ext-iso/$SQUASHFS_RELPATH"
+          sudo mksquashfs squashfs-root/ "ext-iso/$SQUASHFS_RELPATH" -comp xz
+          # Ubuntu live boot reads filesystem.size to size its tmpfs correctly
           sudo du -sx --block-size=1 squashfs-root/ | cut -f1 | \
             sudo tee ext-iso/casper/filesystem.size
-          # Free squashfs-root now to recover ~10 GB before building the final ISO
+          # Free squashfs-root to recover ~10 GB before building the final ISO
           sudo rm -rf squashfs-root/
           df -h
 
       - name: Rebuild bootable ISO
         run: |
-          # Feed the captured boot params back to xorriso so the new ISO has the same
-          # hybrid BIOS/UEFI boot setup as the original Ubuntu ISO.
-          MBR_OPTS=$(tr '\n' ' ' < /tmp/mbr_opts.txt)
-          BOOT_OPTS=$(tr '\n' ' ' < /tmp/boot_opts.txt)
-
-          # shellcheck disable=SC2086  # word-splitting of opts is intentional
-          sudo xorriso -as mkisofs \
+          # Strip -V and --modification-date from captured opts; we supply -volid ourselves.
+          # Use eval so the shell quoting embedded in xorriso's output is interpreted
+          # correctly (e.g. -e '--interval:...' and 'ubuntu-original.iso' references).
+          OPTS=$(grep -v '^-V ' /tmp/xorriso_opts.txt | grep -v '^--modification-date' | tr '\n' ' ')
+          eval "sudo xorriso -as mkisofs \
             -iso-level 3 \
             -full-iso9660-filenames \
             -joliet -joliet-long \
-            -volid "Ubuntu-MacBook" \
-            $MBR_OPTS \
-            $BOOT_OPTS \
+            -volid 'Ubuntu-MacBook' \
+            $OPTS \
             -output ubuntu-macbook.iso \
-            ext-iso/
+            ext-iso/"
 
       - name: Upload ISO artifact
         uses: actions/upload-artifact@v4
