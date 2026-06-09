@@ -1,81 +1,135 @@
-# Draft courtesy google ai (gemini?)
 name: Build MacBook Ubuntu Live ISO
 
 on:
-  workflow_dispatch: # Allows you to trigger the build manually from the GitHub UI
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
 
 jobs:
   build-iso:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
-      - name: Install ISO Customization Tools
+      - name: Free disk space
+        run: |
+          # Ubuntu runners have ~14 GB free; we need ~20 GB for ISO + squashfs work
+          sudo rm -rf \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/.ghcup \
+            /usr/local/share/boost \
+            "$AGENT_TOOLSDIRECTORY"
+          df -h
+
+      - name: Install ISO customization tools
         run: |
           sudo apt-get update
           sudo apt-get install -y squashfs-tools xorriso rsync wget
 
-      - name: Download Official Ubuntu ISO
+      - name: Download Ubuntu 24.04.2 LTS ISO
         run: |
-          # Swap this URL if you prefer standard Ubuntu Desktop 26.04 or an older LTS
-          wget -O ubuntu-original.iso "https://ubuntu.com"
+          wget -O ubuntu-original.iso \
+            "https://releases.ubuntu.com/24.04.2/ubuntu-24.04.2-desktop-amd64.iso"
 
-      - name: Extract ISO and Filesystem
+      - name: Extract ISO and filesystem
         run: |
+          # Capture boot parameters from the original ISO.
+          # -report_system_area as_mkisofs outputs all options needed to recreate the
+          # hybrid BIOS/UEFI boot setup (MBR, EFI partition, El Torito catalog).
+          # Both -report_system_area and -report_el_torito produce identical output for
+          # Ubuntu 24.04 ISOs, so we only need one.
+          xorriso -indev ubuntu-original.iso \
+            -report_system_area as_mkisofs 2>/dev/null > /tmp/xorriso_opts.txt || true
+          echo "=== xorriso opts ===" && cat /tmp/xorriso_opts.txt
+
           mkdir -p mnt/ ext-iso/ squashfs-root/
-
-          # Mount and extract the ISO file contents
           sudo mount -o loop ubuntu-original.iso mnt/
-          rsync -a --exclude=/casper/filesystem.squashfs mnt/ ext-iso/
 
-          # Unsquash the core Ubuntu root file system
-          sudo unsquashfs -d squashfs-root/ mnt/casper/filesystem.squashfs
+          echo "=== ISO casper contents ==="
+          ls -la mnt/casper/ 2>/dev/null || ls -la mnt/
+
+          # Ubuntu 24.04 may use a non-standard squashfs filename; find it dynamically.
+          # Pick the largest .squashfs file — that is always the main live filesystem.
+          SQUASHFS=$(find mnt/ -name "*.squashfs" -type f | xargs ls -S | head -1)
+          if [ -z "$SQUASHFS" ]; then
+            echo "ERROR: no .squashfs file found in ISO"
+            find mnt/ -type f | sort
+            exit 1
+          fi
+          echo "Using squashfs: $SQUASHFS"
+          # Save relative path (strip leading "mnt/") for use in later steps
+          printf '%s' "${SQUASHFS#mnt/}" > /tmp/squashfs_path.txt
+
+          rsync -a --exclude="/${SQUASHFS#mnt/}" mnt/ ext-iso/
+          sudo unsquashfs -d squashfs-root/ "$SQUASHFS"
           sudo umount mnt/
 
-      - name: Inject Broadcom Driver via Chroot
+      - name: Install Broadcom driver in chroot
         run: |
-          # Bind mount essential system directories so apt can run inside the chroot
-          sudo mount --bind /dev squashfs-root/dev
+          # Detect the kernel version shipped inside the live ISO so we can install
+          # matching headers — DKMS must compile bcmwl against the live kernel.
+          KERNEL_VER=$(ls squashfs-root/lib/modules/ | head -1)
+          echo "Live ISO kernel: $KERNEL_VER"
+
+          sudo mount --bind /dev  squashfs-root/dev
           sudo mount --bind /proc squashfs-root/proc
-          sudo mount --bind /sys squashfs-root/sys
+          sudo mount --bind /sys  squashfs-root/sys
           sudo mount --bind /etc/resolv.conf squashfs-root/etc/resolv.conf
 
-          # Run commands INSIDE the live Ubuntu image environment
           sudo chroot squashfs-root/ bash -c "
+            set -e
             export DEBIAN_FRONTEND=noninteractive
             apt-get update
-            apt-get install -y bcmwl-kernel-source dkms
+            # build-essential + headers are required for DKMS to compile the wl module
+            apt-get install -y \
+              build-essential \
+              linux-headers-${KERNEL_VER} \
+              dkms \
+              bcmwl-kernel-source
+            dkms status
             apt-get clean
           "
 
-          # Cleanly unmount directories
           sudo umount squashfs-root/dev
           sudo umount squashfs-root/proc
           sudo umount squashfs-root/sys
           sudo umount squashfs-root/etc/resolv.conf
 
-      - name: Rebuild compressed SquashFS
+      - name: Rebuild SquashFS filesystem
         run: |
-          sudo rm -f ext-iso/casper/filesystem.squashfs
-          sudo mksquashfs squashfs-root/ ext-iso/casper/filesystem.squashfs -comp xz
+          SQUASHFS_RELPATH=$(cat /tmp/squashfs_path.txt)
+          sudo rm -f "ext-iso/$SQUASHFS_RELPATH"
+          sudo mksquashfs squashfs-root/ "ext-iso/$SQUASHFS_RELPATH" -comp xz
+          # Ubuntu live boot reads filesystem.size to size its tmpfs correctly
+          sudo du -sx --block-size=1 squashfs-root/ | cut -f1 | \
+            sudo tee ext-iso/casper/filesystem.size
+          # Free squashfs-root to recover ~10 GB before building the final ISO
+          sudo rm -rf squashfs-root/
+          df -h
 
-      - name: Rebuild Final Bootable ISO File
+      - name: Rebuild bootable ISO
         run: |
-          # Pack it back into an active bootable ISO utilizing xorriso
-          sudo xorriso -as mkisofs \
+          # Strip -V and --modification-date from captured opts; we supply -volid ourselves.
+          # Use eval so the shell quoting embedded in xorriso's output is interpreted
+          # correctly (e.g. -e '--interval:...' and 'ubuntu-original.iso' references).
+          OPTS=$(grep -v '^-V ' /tmp/xorriso_opts.txt | grep -v '^--modification-date' | tr '\n' ' ')
+          eval "sudo xorriso -as mkisofs \
             -iso-level 3 \
             -full-iso9660-filenames \
-            -volid "Ubuntu-MacBook" \
-            -output "ubuntu-macbook.iso" \
-            -eltorito-boot boot/grub/efi.img \
-            -no-emul-boot \
-            -boot-load-size 4 \
-            -boot-info-table \
-            ext-iso/
+            -joliet -joliet-long \
+            -volid 'Ubuntu-MacBook' \
+            $OPTS \
+            -output ubuntu-macbook.iso \
+            ext-iso/"
 
-      - name: Upload Finished ISO Asset
-        uses: actions/artifacts@v4
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v7
         with:
           name: ubuntu-macbook-iso
           path: ubuntu-macbook.iso
