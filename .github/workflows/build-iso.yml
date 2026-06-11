@@ -86,9 +86,9 @@ jobs:
           sudo chroot squashfs-root/ bash -c "
             set -e
             export DEBIAN_FRONTEND=noninteractive
-            # The live ISO ships a cdrom apt source that doesn't exist in chroot.
-            sed -i '/cdrom:/d' /etc/apt/sources.list 2>/dev/null || true
-            grep -rl 'cdrom:' /etc/apt/sources.list.d/ 2>/dev/null | xargs rm -f || true
+            # The live ISO ships a cdrom apt source (file:/cdrom) that doesn't exist in chroot.
+            sed -i '/cdrom/d' /etc/apt/sources.list 2>/dev/null || true
+            find /etc/apt/sources.list.d/ -name '*.list' | xargs grep -rl 'cdrom' 2>/dev/null | xargs rm -f || true
             apt-get update -qq
             # build-essential + headers are required for DKMS to compile the wl module
             apt-get install -y -qq \
