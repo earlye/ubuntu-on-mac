@@ -73,9 +73,9 @@ jobs:
 
       - name: Install Broadcom driver in chroot
         run: |
-          # Extract the kernel version from the vmlinuz that actually boots,
-          # not from /lib/modules/ which may contain multiple kernel versions.
-          KERNEL_VER=$(strings ext-iso/casper/vmlinuz | grep -E '^[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-generic$' | head -1)
+          # vmlinuz is a compressed bzImage; strings won't find the version.
+          # /lib/modules/ is the reliable source for the installed kernel version.
+          KERNEL_VER=$(ls squashfs-root/lib/modules/ | grep -E '^[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-generic$' | sort -V | tail -1)
           echo "Boot kernel: $KERNEL_VER"
 
           sudo mount --bind /dev  squashfs-root/dev
@@ -86,6 +86,9 @@ jobs:
           sudo chroot squashfs-root/ bash -c "
             set -e
             export DEBIAN_FRONTEND=noninteractive
+            # The live ISO ships a cdrom apt source that doesn't exist in chroot.
+            sed -i '/cdrom:/d' /etc/apt/sources.list 2>/dev/null || true
+            grep -rl 'cdrom:' /etc/apt/sources.list.d/ 2>/dev/null | xargs rm -f || true
             apt-get update -qq
             # build-essential + headers are required for DKMS to compile the wl module
             apt-get install -y -qq \
