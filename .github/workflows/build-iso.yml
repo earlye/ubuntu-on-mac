@@ -84,7 +84,7 @@ jobs:
           sudo mount --bind /etc/resolv.conf squashfs-root/etc/resolv.conf
 
           sudo chroot squashfs-root/ bash -c "
-            set -e
+            set -e -v
             export DEBIAN_FRONTEND=noninteractive
             # The live ISO ships a cdrom apt source (file:/cdrom) that doesn't exist in chroot.
             sed -i '/cdrom/d' /etc/apt/sources.list 2>/dev/null || true
