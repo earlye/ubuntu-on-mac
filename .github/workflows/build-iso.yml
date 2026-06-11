@@ -91,12 +91,12 @@ jobs:
             find /etc/apt/sources.list.d/ -name '*.list' | xargs grep -rl 'cdrom' 2>/dev/null | xargs rm -f || true
             apt-get update -qq
             # build-essential + headers are required for DKMS to compile the wl module
-            apt-get install -y -qq \
-              build-essential \
-              linux-headers-${KERNEL_VER} \
-              dkms \
-              bcmwl-kernel-source
-            dkms status
+            apt-get install -y -qq build-essential linux-headers-${KERNEL_VER} dkms
+            # bcmwl-kernel-source postinst triggers a DKMS auto-build; on kernel 6.x this can
+            # hang indefinitely. Allow 30 min then continue so the ISO build does not stall.
+            timeout 1800 apt-get install -y -qq bcmwl-kernel-source || \
+              echo 'WARNING: bcmwl install/DKMS build failed or timed out after 30 min'
+            dkms status || true
             apt-get clean
           "
 
