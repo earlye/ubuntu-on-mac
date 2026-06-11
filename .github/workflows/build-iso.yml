@@ -32,10 +32,11 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq squashfs-tools xorriso rsync wget
 
-      - name: Download Ubuntu 24.04.2 LTS ISO
+      - name: Download Ubuntu 26.04 LTS ISO
         run: |
+          # Verify this URL at https://releases.ubuntu.com/26.04/ before running
           wget -q -O ubuntu-original.iso \
-            "https://releases.ubuntu.com/24.04.2/ubuntu-24.04.2-desktop-amd64.iso"
+            "https://releases.ubuntu.com/26.04/ubuntu-26.04-desktop-amd64.iso"
 
       - name: Extract ISO and filesystem
         run: |
@@ -43,7 +44,7 @@ jobs:
           # -report_system_area as_mkisofs outputs all options needed to recreate the
           # hybrid BIOS/UEFI boot setup (MBR, EFI partition, El Torito catalog).
           # Both -report_system_area and -report_el_torito produce identical output for
-          # Ubuntu 24.04 ISOs, so we only need one.
+          # Ubuntu ISOs, so we only need one.
           xorriso -indev ubuntu-original.iso \
             -report_system_area as_mkisofs 2>/dev/null > /tmp/xorriso_opts.txt || true
           echo "=== xorriso opts ===" && cat /tmp/xorriso_opts.txt
@@ -54,7 +55,7 @@ jobs:
           echo "=== ISO casper contents ==="
           ls -la mnt/casper/ 2>/dev/null || ls -la mnt/
 
-          # Ubuntu 24.04 may use a non-standard squashfs filename; find it dynamically.
+          # Ubuntu may use a non-standard squashfs filename; find it dynamically.
           # Pick the largest .squashfs file — that is always the main live filesystem.
           SQUASHFS=$(find mnt/ -name "*.squashfs" -type f | xargs ls -S | head -1)
           if [ -z "$SQUASHFS" ]; then
@@ -72,10 +73,10 @@ jobs:
 
       - name: Install Broadcom driver in chroot
         run: |
-          # Detect the kernel version shipped inside the live ISO so we can install
-          # matching headers — DKMS must compile bcmwl against the live kernel.
-          KERNEL_VER=$(ls squashfs-root/lib/modules/ | head -1)
-          echo "Live ISO kernel: $KERNEL_VER"
+          # Extract the kernel version from the vmlinuz that actually boots,
+          # not from /lib/modules/ which may contain multiple kernel versions.
+          KERNEL_VER=$(strings ext-iso/casper/vmlinuz | grep -E '^[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-generic$' | head -1)
+          echo "Boot kernel: $KERNEL_VER"
 
           sudo mount --bind /dev  squashfs-root/dev
           sudo mount --bind /proc squashfs-root/proc
