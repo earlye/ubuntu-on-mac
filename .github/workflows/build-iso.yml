@@ -93,10 +93,17 @@ jobs:
             apt-get update -qq
             # build-essential + headers are required for DKMS to compile the wl module
             apt-get install -y -qq build-essential linux-headers-${KERNEL_VER} dkms
-            # bcmwl-kernel-source postinst triggers a DKMS auto-build; on kernel 6.x this can
-            # hang indefinitely. Allow 30 min then continue so the ISO build does not stall.
-            timeout 1800 apt-get install -y -qq bcmwl-kernel-source || \
-              echo 'WARNING: bcmwl install/DKMS build failed or timed out after 30 min'
+            # Broadcom STA driver: Ubuntu <=24 calls it bcmwl-kernel-source, 26+ may use
+            # broadcom-sta-dkms. Probe both; postinst triggers DKMS so cap at 30 min.
+            BCMWL_PKG=
+            apt-cache show bcmwl-kernel-source  >/dev/null 2>&1 && BCMWL_PKG=bcmwl-kernel-source
+            apt-cache show broadcom-sta-dkms    >/dev/null 2>&1 && BCMWL_PKG=broadcom-sta-dkms
+            if [ -n \"\$BCMWL_PKG\" ]; then
+              timeout 1800 apt-get install -y -qq \"\$BCMWL_PKG\" || \
+                echo \"WARNING: \$BCMWL_PKG install/DKMS build failed or timed out after 30 min\"
+            else
+              echo 'WARNING: No Broadcom STA driver package found in repos'
+            fi
             # dkms status can hang waiting for a lock if an orphaned DKMS build is still running
             timeout 30 dkms status || true
             apt-get clean
