@@ -96,7 +96,8 @@ jobs:
             # hang indefinitely. Allow 30 min then continue so the ISO build does not stall.
             timeout 1800 apt-get install -y -qq bcmwl-kernel-source || \
               echo 'WARNING: bcmwl install/DKMS build failed or timed out after 30 min'
-            dkms status || true
+            # dkms status can hang waiting for a lock if an orphaned DKMS build is still running
+            timeout 30 dkms status || true
             apt-get clean
           "
 
