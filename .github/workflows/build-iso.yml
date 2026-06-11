@@ -73,9 +73,9 @@ jobs:
 
       - name: Install Broadcom driver in chroot
         run: |
-          # Extract the kernel version from the vmlinuz that actually boots,
-          # not from /lib/modules/ which may contain multiple kernel versions.
-          KERNEL_VER=$(strings ext-iso/casper/vmlinuz | grep -E '^[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-generic$' | head -1)
+          # vmlinuz is a compressed bzImage; strings won't find the version.
+          # /lib/modules/ is the reliable source for the installed kernel version.
+          KERNEL_VER=$(ls squashfs-root/lib/modules/ | grep -E '^[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-generic$' | sort -V | tail -1)
           echo "Boot kernel: $KERNEL_VER"
 
           sudo mount --bind /dev  squashfs-root/dev
@@ -84,16 +84,28 @@ jobs:
           sudo mount --bind /etc/resolv.conf squashfs-root/etc/resolv.conf
 
           sudo chroot squashfs-root/ bash -c "
-            set -e
+            set -e -v
             export DEBIAN_FRONTEND=noninteractive
+            # The live ISO ships a cdrom apt source that doesn't exist in chroot.
+            # Ubuntu 26+ uses DEB822 .sources format; scrub both .list and .sources files.
+            sed -i '/cdrom/d' /etc/apt/sources.list 2>/dev/null || true
+            find /etc/apt/sources.list.d/ \( -name '*.list' -o -name '*.sources' \) | xargs -r grep -rl 'cdrom' 2>/dev/null | xargs -r rm -f || true
             apt-get update -qq
             # build-essential + headers are required for DKMS to compile the wl module
-            apt-get install -y -qq \
-              build-essential \
-              linux-headers-${KERNEL_VER} \
-              dkms \
-              bcmwl-kernel-source
-            dkms status
+            apt-get install -y -qq build-essential linux-headers-${KERNEL_VER} dkms
+            # Broadcom STA driver: Ubuntu <=24 calls it bcmwl-kernel-source, 26+ may use
+            # broadcom-sta-dkms. Probe both; postinst triggers DKMS so cap at 30 min.
+            BCMWL_PKG=
+            apt-cache show bcmwl-kernel-source  >/dev/null 2>&1 && BCMWL_PKG=bcmwl-kernel-source
+            apt-cache show broadcom-sta-dkms    >/dev/null 2>&1 && BCMWL_PKG=broadcom-sta-dkms
+            if [ -n \"\$BCMWL_PKG\" ]; then
+              timeout 1800 apt-get install -y -qq \"\$BCMWL_PKG\" || \
+                echo \"WARNING: \$BCMWL_PKG install/DKMS build failed or timed out after 30 min\"
+            else
+              echo 'WARNING: No Broadcom STA driver package found in repos'
+            fi
+            # dkms status can hang waiting for a lock if an orphaned DKMS build is still running
+            timeout 30 dkms status || true
             apt-get clean
           "
 
@@ -101,6 +113,39 @@ jobs:
           sudo umount squashfs-root/proc
           sudo umount squashfs-root/sys
           sudo umount squashfs-root/etc/resolv.conf
+
+      - name: Tag derivative and verify squashfs
+        run: |
+          echo "=== OS Release (original) ==="
+          cat squashfs-root/etc/os-release
+
+          # Stamp derivative identity using standard freedesktop VARIANT fields.
+          # sed out any existing VARIANT/VARIANT_ID lines first so we don't duplicate.
+          sudo sed -i \
+            -e 's|^PRETTY_NAME=.*|PRETTY_NAME="Ubuntu 26.04 LTS [raccoon-wyrm]"|' \
+            -e '/^VARIANT=/d' \
+            -e '/^VARIANT_ID=/d' \
+            squashfs-root/etc/os-release
+          printf 'VARIANT="raccoon-wyrm"\nVARIANT_ID=raccoon-wyrm\n' \
+            | sudo tee -a squashfs-root/etc/os-release > /dev/null
+          # Keep lsb-release in sync if present
+          if [ -f squashfs-root/etc/lsb-release ]; then
+            sudo sed -i \
+              's|^DISTRIB_DESCRIPTION=.*|DISTRIB_DESCRIPTION="Ubuntu 26.04 LTS [raccoon-wyrm]"|' \
+              squashfs-root/etc/lsb-release
+          fi
+
+          echo "=== OS Release (updated) ==="
+          cat squashfs-root/etc/os-release
+
+          # Verify Broadcom wl module is present — fail the build if it's missing.
+          KERNEL_VER=$(ls squashfs-root/lib/modules/ | grep -E '^[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-generic$' | sort -V | tail -1)
+          WL_MODULE=$(find squashfs-root/lib/modules/${KERNEL_VER} -name "wl.ko*" -type f | head -1)
+          if [ -z "$WL_MODULE" ]; then
+            echo "ERROR: wl.ko not found under lib/modules/${KERNEL_VER} — Broadcom driver not installed"
+            exit 1
+          fi
+          echo "Broadcom module verified: ${WL_MODULE}"
 
       - name: Rebuild SquashFS filesystem
         run: |
