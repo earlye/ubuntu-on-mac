@@ -29,12 +29,12 @@ jobs:
 
       - name: Install ISO customization tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y squashfs-tools xorriso rsync wget
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq squashfs-tools xorriso rsync wget
 
       - name: Download Ubuntu 24.04.2 LTS ISO
         run: |
-          wget -O ubuntu-original.iso \
+          wget -q -O ubuntu-original.iso \
             "https://releases.ubuntu.com/24.04.2/ubuntu-24.04.2-desktop-amd64.iso"
 
       - name: Extract ISO and filesystem
@@ -67,7 +67,7 @@ jobs:
           printf '%s' "${SQUASHFS#mnt/}" > /tmp/squashfs_path.txt
 
           rsync -a --exclude="/${SQUASHFS#mnt/}" mnt/ ext-iso/
-          sudo unsquashfs -d squashfs-root/ "$SQUASHFS"
+          sudo unsquashfs -no-progress -d squashfs-root/ "$SQUASHFS"
           sudo umount mnt/
 
       - name: Install Broadcom driver in chroot
@@ -85,9 +85,9 @@ jobs:
           sudo chroot squashfs-root/ bash -c "
             set -e
             export DEBIAN_FRONTEND=noninteractive
-            apt-get update
+            apt-get update -qq
             # build-essential + headers are required for DKMS to compile the wl module
-            apt-get install -y \
+            apt-get install -y -qq \
               build-essential \
               linux-headers-${KERNEL_VER} \
               dkms \
@@ -105,7 +105,7 @@ jobs:
         run: |
           SQUASHFS_RELPATH=$(cat /tmp/squashfs_path.txt)
           sudo rm -f "ext-iso/$SQUASHFS_RELPATH"
-          sudo mksquashfs squashfs-root/ "ext-iso/$SQUASHFS_RELPATH" -comp xz
+          sudo mksquashfs squashfs-root/ "ext-iso/$SQUASHFS_RELPATH" -comp xz -no-progress
           # Ubuntu live boot reads filesystem.size to size its tmpfs correctly
           sudo du -sx --block-size=1 squashfs-root/ | cut -f1 | \
             sudo tee ext-iso/casper/filesystem.size
