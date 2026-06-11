@@ -86,9 +86,10 @@ jobs:
           sudo chroot squashfs-root/ bash -c "
             set -e -v
             export DEBIAN_FRONTEND=noninteractive
-            # The live ISO ships a cdrom apt source (file:/cdrom) that doesn't exist in chroot.
+            # The live ISO ships a cdrom apt source that doesn't exist in chroot.
+            # Ubuntu 26+ uses DEB822 .sources format; scrub both .list and .sources files.
             sed -i '/cdrom/d' /etc/apt/sources.list 2>/dev/null || true
-            find /etc/apt/sources.list.d/ -name '*.list' | xargs -r grep -rl 'cdrom' 2>/dev/null | xargs -r rm -f || true
+            find /etc/apt/sources.list.d/ \( -name '*.list' -o -name '*.sources' \) | xargs -r grep -rl 'cdrom' 2>/dev/null | xargs -r rm -f || true
             apt-get update -qq
             # build-essential + headers are required for DKMS to compile the wl module
             apt-get install -y -qq build-essential linux-headers-${KERNEL_VER} dkms
