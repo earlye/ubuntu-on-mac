@@ -114,6 +114,39 @@ jobs:
           sudo umount squashfs-root/sys
           sudo umount squashfs-root/etc/resolv.conf
 
+      - name: Tag derivative and verify squashfs
+        run: |
+          echo "=== OS Release (original) ==="
+          cat squashfs-root/etc/os-release
+
+          # Stamp derivative identity using standard freedesktop VARIANT fields.
+          # sed out any existing VARIANT/VARIANT_ID lines first so we don't duplicate.
+          sudo sed -i \
+            -e 's|^PRETTY_NAME=.*|PRETTY_NAME="Ubuntu 26.04 LTS [raccoon-wyrm]"|' \
+            -e '/^VARIANT=/d' \
+            -e '/^VARIANT_ID=/d' \
+            squashfs-root/etc/os-release
+          printf 'VARIANT="raccoon-wyrm"\nVARIANT_ID=raccoon-wyrm\n' \
+            | sudo tee -a squashfs-root/etc/os-release > /dev/null
+          # Keep lsb-release in sync if present
+          if [ -f squashfs-root/etc/lsb-release ]; then
+            sudo sed -i \
+              's|^DISTRIB_DESCRIPTION=.*|DISTRIB_DESCRIPTION="Ubuntu 26.04 LTS [raccoon-wyrm]"|' \
+              squashfs-root/etc/lsb-release
+          fi
+
+          echo "=== OS Release (updated) ==="
+          cat squashfs-root/etc/os-release
+
+          # Verify Broadcom wl module is present — fail the build if it's missing.
+          KERNEL_VER=$(ls squashfs-root/lib/modules/ | grep -E '^[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-generic$' | sort -V | tail -1)
+          WL_MODULE=$(find squashfs-root/lib/modules/${KERNEL_VER} -name "wl.ko*" -type f | head -1)
+          if [ -z "$WL_MODULE" ]; then
+            echo "ERROR: wl.ko not found under lib/modules/${KERNEL_VER} — Broadcom driver not installed"
+            exit 1
+          fi
+          echo "Broadcom module verified: ${WL_MODULE}"
+
       - name: Rebuild SquashFS filesystem
         run: |
           SQUASHFS_RELPATH=$(cat /tmp/squashfs_path.txt)
