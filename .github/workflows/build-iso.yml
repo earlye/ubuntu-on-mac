@@ -34,9 +34,9 @@ jobs:
 
       - name: Download Ubuntu 26.04 LTS ISO
         run: |
-          # Verify this URL at https://releases.ubuntu.com/26.04/ before running
           wget -q -O ubuntu-original.iso \
-            "https://releases.ubuntu.com/26.04/ubuntu-26.04-desktop-amd64.iso"
+            "https://releases.ubuntu.com/resolute/ubuntu-26.04-desktop-amd64.iso"
+          echo "487f87faaf547ea30e0aba4d5b53346292571256b25333a978db1692bcee9dd2  ubuntu-original.iso" | sha256sum -c
 
       - name: Extract ISO and filesystem
         run: |
