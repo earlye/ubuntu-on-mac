@@ -71,6 +71,19 @@ jobs:
           sudo unsquashfs -no-progress -d squashfs-root/ "$SQUASHFS"
           sudo umount mnt/
 
+      - name: Verify squashfs apt keyring (pre-build)
+        run: |
+          UBUNTU_KEY="1BC4DB0A475955C8"
+          echo "=== Trusted keyring files ==="
+          ls -la squashfs-root/etc/apt/trusted.gpg.d/
+          find squashfs-root/etc/apt/trusted.gpg.d/ -name "*.gpg" -print0 | \
+            xargs -0 -I KEYFILE gpg --no-default-keyring --keyring "$(pwd)/KEYFILE" --list-keys 2>/dev/null | \
+            grep -q "$UBUNTU_KEY" || {
+              echo "ERROR: Ubuntu signing key $UBUNTU_KEY not found — check ISO extraction"
+              exit 1
+            }
+          echo "OK: Ubuntu signing key $UBUNTU_KEY present"
+
       - name: Install Broadcom driver in chroot
         run: |
           # vmlinuz is a compressed bzImage; strings won't find the version.
@@ -146,6 +159,19 @@ jobs:
             exit 1
           fi
           echo "Broadcom module verified: ${WL_MODULE}"
+
+      - name: Verify squashfs apt keyring (post-modification)
+        run: |
+          UBUNTU_KEY="1BC4DB0A475955C8"
+          echo "=== Trusted keyring files ==="
+          ls -la squashfs-root/etc/apt/trusted.gpg.d/
+          find squashfs-root/etc/apt/trusted.gpg.d/ -name "*.gpg" -print0 | \
+            xargs -0 -I KEYFILE gpg --no-default-keyring --keyring "$(pwd)/KEYFILE" --list-keys 2>/dev/null | \
+            grep -q "$UBUNTU_KEY" || {
+              echo "ERROR: Ubuntu signing key $UBUNTU_KEY missing after chroot modifications — keyring was corrupted"
+              exit 1
+            }
+          echo "OK: Ubuntu signing key $UBUNTU_KEY present"
 
       - name: Rebuild SquashFS filesystem
         run: |
