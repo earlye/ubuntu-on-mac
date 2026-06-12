@@ -41,10 +41,13 @@ jobs:
           wget -q -O SHA256SUMS.gpg \
             "https://releases.ubuntu.com/resolute/SHA256SUMS.gpg"
           # Verify SHA256SUMS is signed by Ubuntu's known CD image key (2012).
-          # This key is pre-installed on ubuntu-latest runners via ubuntu-keyring
-          # and is independent of releases.ubuntu.com — a compromised server
-          # cannot forge a valid signature without stealing the private key.
-          gpg --keyid-format long --verify SHA256SUMS.gpg SHA256SUMS
+          # The key lives in apt's trusted store (installed via ubuntu-keyring),
+          # independent of releases.ubuntu.com — a compromised server cannot
+          # forge a valid signature without stealing the private key.
+          gpg --no-default-keyring \
+            --keyring /etc/apt/trusted.gpg.d/ubuntu-keyring-2012-cdimage.gpg \
+            --keyid-format long \
+            --verify SHA256SUMS.gpg SHA256SUMS
           # Verify our ISO's hash is in the authenticated SHA256SUMS file
           grep "ubuntu-26.04-desktop-amd64.iso" SHA256SUMS | sha256sum -c
 
