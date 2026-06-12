@@ -48,8 +48,8 @@ jobs:
             --keyring /etc/apt/trusted.gpg.d/ubuntu-keyring-2012-cdimage.gpg \
             --keyid-format long \
             --verify SHA256SUMS.gpg SHA256SUMS
-          # Verify our ISO's hash is in the authenticated SHA256SUMS file
-          grep "ubuntu-26.04-desktop-amd64.iso" SHA256SUMS | sha256sum -c
+          # Verify our ISO's hash against the authenticated SHA256SUMS file
+          grep "ubuntu-26.04-desktop-amd64.iso" SHA256SUMS | awk '{print $1 "  ubuntu-original.iso"}' | sha256sum -c
 
       - name: Extract ISO and filesystem
         run: |
