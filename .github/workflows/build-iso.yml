@@ -71,6 +71,13 @@ jobs:
           sudo unsquashfs -no-progress -d squashfs-root/ "$SQUASHFS"
           sudo umount mnt/
 
+      - name: Dump ISO cdrom Release signature
+        run: |
+          echo "=== Release.gpg signer ==="
+          gpg --verify ext-iso/dists/resolute/Release.gpg ext-iso/dists/resolute/Release 2>&1 || true
+          echo "=== InRelease signer ==="
+          gpg --verify ext-iso/dists/resolute/InRelease 2>&1 || true
+
       - name: Dump squashfs apt keyring (pre-build)
         run: |
           echo "=== Trusted keyring files ==="
