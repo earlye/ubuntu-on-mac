@@ -194,7 +194,7 @@ jobs:
           # Remove existing Release.gpg first — gpg refuses to overwrite an existing output file.
           # --batch --passphrase '' --pinentry-mode loopback: bypass pinentry in GHA
           # (no /dev/tty available; key has no passphrase so this is safe)
-          rm -f ext-iso/dists/resolute/Release.gpg
+          sudo rm -f ext-iso/dists/resolute/Release.gpg
           gpg --batch --passphrase '' --pinentry-mode loopback \
             --default-key "$KEY_FPR" --detach-sign --no-armor \
             --output ext-iso/dists/resolute/Release.gpg \
