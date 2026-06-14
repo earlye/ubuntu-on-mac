@@ -191,14 +191,14 @@ jobs:
             sudo tee squashfs-root/etc/apt/trusted.gpg.d/raccoon-wyrm-cdimage.gpg > /dev/null
 
           # Re-sign the cdrom Release (replaces Ubuntu's unverifiable signature)
-          # Remove existing Release.gpg first — gpg refuses to overwrite an existing output file.
+          # ext-iso/ is root-owned (rsync from sudo mount); sign to /tmp then sudo-move into place.
           # --batch --passphrase '' --pinentry-mode loopback: bypass pinentry in GHA
           # (no /dev/tty available; key has no passphrase so this is safe)
-          sudo rm -f ext-iso/dists/resolute/Release.gpg
           gpg --batch --passphrase '' --pinentry-mode loopback \
             --default-key "$KEY_FPR" --detach-sign --no-armor \
-            --output ext-iso/dists/resolute/Release.gpg \
+            --output /tmp/Release.gpg \
             ext-iso/dists/resolute/Release
+          sudo mv /tmp/Release.gpg ext-iso/dists/resolute/Release.gpg
 
       - name: Verify cdrom signing (post-modification)
         run: |
