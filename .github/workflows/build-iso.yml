@@ -34,9 +34,22 @@ jobs:
 
       - name: Download Ubuntu 26.04 LTS ISO
         run: |
-          # Verify this URL at https://releases.ubuntu.com/26.04/ before running
           wget -q -O ubuntu-original.iso \
-            "https://releases.ubuntu.com/26.04/ubuntu-26.04-desktop-amd64.iso"
+            "https://releases.ubuntu.com/resolute/ubuntu-26.04-desktop-amd64.iso"
+          wget -q -O SHA256SUMS \
+            "https://releases.ubuntu.com/resolute/SHA256SUMS"
+          wget -q -O SHA256SUMS.gpg \
+            "https://releases.ubuntu.com/resolute/SHA256SUMS.gpg"
+          # Verify SHA256SUMS is signed by Ubuntu's known CD image key (2012).
+          # The key lives in apt's trusted store (installed via ubuntu-keyring),
+          # independent of releases.ubuntu.com — a compromised server cannot
+          # forge a valid signature without stealing the private key.
+          gpg --no-default-keyring \
+            --keyring /etc/apt/trusted.gpg.d/ubuntu-keyring-2012-cdimage.gpg \
+            --keyid-format long \
+            --verify SHA256SUMS.gpg SHA256SUMS
+          # Verify our ISO's hash against the authenticated SHA256SUMS file
+          grep "ubuntu-26.04-desktop-amd64.iso" SHA256SUMS | awk '{print $1 "  ubuntu-original.iso"}' | sha256sum -c
 
       - name: Extract ISO and filesystem
         run: |
@@ -70,6 +83,21 @@ jobs:
           rsync -a --exclude="/${SQUASHFS#mnt/}" mnt/ ext-iso/
           sudo unsquashfs -no-progress -d squashfs-root/ "$SQUASHFS"
           sudo umount mnt/
+
+      - name: Dump ISO cdrom Release signature
+        run: |
+          echo "=== Release.gpg signer ==="
+          gpg --verify ext-iso/dists/resolute/Release.gpg ext-iso/dists/resolute/Release 2>&1 || true
+          echo "=== InRelease signer ==="
+          gpg --verify ext-iso/dists/resolute/InRelease 2>&1 || true
+
+      - name: Dump squashfs apt keyring (pre-build)
+        run: |
+          echo "=== Trusted keyring files ==="
+          ls -la squashfs-root/etc/apt/trusted.gpg.d/
+          echo "=== Keys in each file ==="
+          find squashfs-root/etc/apt/trusted.gpg.d/ -name "*.gpg" -print0 | \
+            xargs -0 -I KEYFILE sh -c 'echo "--- $(pwd)/KEYFILE ---"; gpg --no-default-keyring --keyring "$(pwd)/KEYFILE" --list-keys 2>&1 || true'
 
       - name: Install Broadcom driver in chroot
         run: |
@@ -146,6 +174,44 @@ jobs:
             exit 1
           fi
           echo "Broadcom module verified: ${WL_MODULE}"
+
+      - name: Re-sign cdrom Release with build key and import into squashfs
+        run: |
+          # Ubuntu 26.04 ships a cdrom Release signed with key 6501BC1735F31F5FBD9A66331BC4DB0A475955C8
+          # which is absent from the ubuntu-keyring package — causing apt to reject the cdrom
+          # source on air-gapped installs. We take over signing as the derivative maintainer:
+          # the ISO is already verified clean via SHA256SUMS.gpg (signed by the known 2012 key).
+          gpg --batch --passphrase '' \
+            --quick-gen-key "raccoon-wyrm cdimage <raccoon-wyrm@local>" ed25519 sign 0
+          KEY_FPR=$(gpg --with-colons --list-keys raccoon-wyrm@local | awk -F: '/^fpr/{print $10; exit}')
+          echo "Build signing key: $KEY_FPR"
+
+          # Import public key into squashfs trusted keyring
+          gpg --export "$KEY_FPR" | \
+            sudo tee squashfs-root/etc/apt/trusted.gpg.d/raccoon-wyrm-cdimage.gpg > /dev/null
+
+          # Re-sign the cdrom Release (replaces Ubuntu's unverifiable signature)
+          # ext-iso/ is root-owned (rsync from sudo mount); sign to /tmp then sudo-move into place.
+          # --batch --passphrase '' --pinentry-mode loopback: bypass pinentry in GHA
+          # (no /dev/tty available; key has no passphrase so this is safe)
+          gpg --batch --passphrase '' --pinentry-mode loopback \
+            --default-key "$KEY_FPR" --detach-sign --no-armor \
+            --output /tmp/Release.gpg \
+            ext-iso/dists/resolute/Release
+          sudo mv /tmp/Release.gpg ext-iso/dists/resolute/Release.gpg
+
+      - name: Verify cdrom signing (post-modification)
+        run: |
+          KEYRING="$(pwd)/squashfs-root/etc/apt/trusted.gpg.d/raccoon-wyrm-cdimage.gpg"
+          echo "=== Trusted keyring files ==="
+          ls -la squashfs-root/etc/apt/trusted.gpg.d/
+          [ -f "$KEYRING" ] || { echo "ERROR: raccoon-wyrm cdimage key not in squashfs"; exit 1; }
+          echo "=== Build key ==="
+          gpg --no-default-keyring --keyring "$KEYRING" --list-keys 2>&1
+          # Verify the re-signed Release validates against the key in the squashfs
+          gpg --no-default-keyring --keyring "$KEYRING" \
+            --verify ext-iso/dists/resolute/Release.gpg ext-iso/dists/resolute/Release
+          echo "OK: cdrom Release.gpg verifies with squashfs key"
 
       - name: Rebuild SquashFS filesystem
         run: |
